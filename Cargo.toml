@@ -1,0 +1,19 @@
+[package]
+name = "mbms"
+version = "0.1.0"
+authors = ["Mr. L <krzys.boronski@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+rand = "*"
+regex = "*"
+lazy_static = "1.2.0"
+num = "*"
+
+[lib]
+name = "mbms"
+path = "src/lib.rs"
+
+[[bin]]
+name = "mbms"
+path = "src/main.rs"
