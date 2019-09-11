@@ -6,6 +6,7 @@ extern crate lazy_static;
 
 pub mod util;
 pub mod cbms;
+pub mod wbms;
 pub mod compiler;
 pub mod cbms_printer;
 #[cfg(test)]
