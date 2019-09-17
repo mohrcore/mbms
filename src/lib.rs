@@ -11,3 +11,8 @@ pub mod compiler;
 pub mod cbms_printer;
 #[cfg(test)]
 mod tests;
+
+pub struct BMSTimeline {
+    pub bpm: f64,
+    
+}
