@@ -8,6 +8,7 @@ use std::str::FromStr;
 use std::fs::File;
 use std::io::Read;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 lazy_static!{
     static ref CHANNEL_CMD_REGEX: Regex = Regex::new(r"#(?P<measure>[0-9]{3})(?P<channel>[0-9]{2}):(?P<indices>[[:alnum:]]*)").unwrap();
@@ -18,7 +19,7 @@ lazy_static!{
 
 use crate::cbms::*;
 use crate::util::pair_diff;
-use crate::wbms::*;
+use crate::bms::{BMSTimings, BMSTime};
 
 #[derive(Copy, Clone, Debug)]
 pub enum BMSImportError {
@@ -39,7 +40,7 @@ enum BMSCommand {
 #[derive(Clone, Debug)]
 enum BMSSongInfo {
     Title(String),
-    BPM(usize),
+    BPM(f32),
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -55,7 +56,8 @@ pub struct ImportedBMS {
     channel_args: Vec<u32>,
     pub resource_table: Vec<String>,
     pub title: String,
-    pub bpm: usize,
+    pub bpm: f32,
+    pub timing: BMSTimings,
 }
 
 impl ImportedBMS {
@@ -64,13 +66,7 @@ impl ImportedBMS {
     pub fn eval_and_compile(&self) -> CBMS {
         //Copy only channel command sets from cmd_list to channel_cmd_sets
         //Any logic flow, etc. should take place here
-        let mut channel_cmd_sets = Vec::new();
-        for cmd in &self.cmd_list {
-            match cmd {
-                BMSCommand::Channel(ch_set) => channel_cmd_sets.push(ch_set),
-                _ => (),
-            }
-        }
+        let mut channel_cmd_sets = eval_ibms(&self.cmd_list);
         //Sort command sets
         channel_cmd_sets.sort_by(|a, b| a.measure.cmp(&b.measure));
         //Initialize CBMS vectors
@@ -117,38 +113,22 @@ impl ImportedBMS {
             idx += set_cnt;
         }
         CBMS {
-            command_cnt,
+            command_cnt: Rc::new(command_cnt),
             commands,
-            measure_sets,
+            measure_sets: Rc::new(measure_sets),
         }
     }
+}
 
-    pub fn to_wbms(&self) -> WBMS {
-        //This part should bwe a separate function!!!! --------------------------------
-
-        //Copy only channel command sets from cmd_list to channel_cmd_sets
-        //Any logic flow, etc. should take place here
-        let mut channel_cmd_sets = Vec::new();
-        for cmd in &self.cmd_list {
-            if let BMSCommand::Channel(ch_set) = cmd {
-                channel_cmd_sets.push(ch_set);
-            }
-        }
-        //Sort command sets
-        channel_cmd_sets.sort_by(|a, b| a.measure.cmp(&b.measure));
-        //-----------------------------------------------------------------------------
-        let mut indices = Vec::new();
-        for cmd_set in &channel_cmd_sets {
-            for (i, _) in (cmd_set.args_idx.0 .. cmd_set.args_idx.1).enumerate() {
-                let time = cmd_set.measure as f64 + i as f64 / pair_diff(cmd_set.args_idx) as f64;
-                indices.push((time, WCommand::Channel(cmd_set.channel, self.channel_args[cmd_set.args_idx.0 + i])));
-            }
-        }
-        indices.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
-        WBMS {
-            indices,
+fn eval_ibms<'l>(cmds: &'l [BMSCommand]) -> Vec<&'l ChannelCommandSet> {
+    let mut channel_cmd_sets = Vec::new();
+    for cmd in cmds {
+        match cmd {
+            BMSCommand::Channel(ch_set) => channel_cmd_sets.push(ch_set),
+            _ => (),
         }
     }
+    channel_cmd_sets
 }
 
 pub fn import_bms_from_file(path: &str) -> Result<ImportedBMS, BMSImportError> {
@@ -164,7 +144,7 @@ pub fn import_bms(raw_bms: &str) -> Result<ImportedBMS, BMSImportError> {
     let mut cmd_list = Vec::new();
     let mut channel_args = Vec::new();
     let mut title = String::new();
-    let mut bpm = 0;
+    let mut bpm = 0.0;
     for line in raw_bms.lines() {
         if let Some(cmd) = parse_bmscript_line(line, &mut channel_args)? {
             if let BMSCommand::SongInfo(ref sinfo) = &cmd {
@@ -183,6 +163,7 @@ pub fn import_bms(raw_bms: &str) -> Result<ImportedBMS, BMSImportError> {
         resource_table,
         title,
         bpm,
+        timing: vec![(BMSTime::from(0.0), bpm, 4)], //THIS IS A PLACEHOLDER VALUE, true for most charts tho.
     })
 }
 
@@ -238,7 +219,7 @@ fn parse_bmscript_line(line: &str, channel_args: &mut Vec<u32>) -> Result<Option
         return Ok(Some(BMSCommand::SongInfo(BMSSongInfo::Title(title))));
     //Capture song BPM
     } else if let Some(captures) = BPM_REGEX.captures(line) {
-        let bpm = usize::from_str(captures.name("bpm").unwrap().as_str())
+        let bpm = f32::from_str(captures.name("bpm").unwrap().as_str())
             .or_else(|_| Err(BMSImportError::NumericFormatError))?;
         return Ok(Some(BMSCommand::SongInfo(BMSSongInfo::BPM(bpm))));
     }

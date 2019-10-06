@@ -3,6 +3,9 @@ extern crate rand;
 mod player;
 
 use crate::util::pair_diff;
+use crate::bms::BMSTime;
+
+use std::rc::*;
 
 //use rand::Rng;
 
@@ -32,23 +35,23 @@ pub struct ChannelCommand {
 
 #[derive(Debug)]
 pub struct CBMS {
-    pub command_cnt: Vec<usize>,
+    pub command_cnt: Rc<Vec<usize>>,
     pub commands: Vec<ChannelCommand>,
-    pub measure_sets: Vec<MeasureCommandSet>,
+    pub measure_sets: Rc<Vec<MeasureCommandSet>>,
 }
 
 impl CBMS {
     pub fn new() -> Self {
         Self {
-            command_cnt: Vec::new(),
+            command_cnt: Rc::new(Vec::new()),
             commands: Vec::new(),
-            measure_sets: Vec::new(),
+            measure_sets: Rc::new(Vec::new()),
         }
     }
-    pub fn iter<'bms>(&'bms self) -> CBMSIterator<'bms> {
+    pub fn iter(&self) -> CBMSIterator {
         CBMSIterator::new(&self)
     }
-    pub fn iter_from_bar<'bms>(&'bms self, bar: usize) -> Result<CBMSIterator<'bms>, CBMSError> {
+    pub fn iter_from_bar<>(&self, bar: usize) -> Result<CBMSIterator, CBMSError> {
         //Check wether the bar exists
         if bar >= self.measure_sets.len() { return Err(CBMSError::BarOutOfRange); }
         let mut bar_id = bar;
@@ -59,8 +62,11 @@ impl CBMS {
         //Create iterator
         if (bar as u32) > self.measure_sets[bar_id].measure { return Err(CBMSError::BarIsEmpty); }
         Ok(CBMSIterator {
-            bms: self,
-            idata: self.iter_data_from_bar(bar),
+            measure_sets: Rc::clone(&self.measure_sets),
+            command_cnt: Rc::clone(&self.command_cnt),
+            current_set: bar,
+            current_cmd_pos: self.measure_sets[bar].commands_idx.0,
+            current_cmd_cnt_pos: self.measure_sets[bar].command_cnt_idx.0,
         })
     }
     pub fn iter_data_from_bar(&self, bar: usize) -> CBMSIteratorData {
@@ -74,6 +80,9 @@ impl CBMS {
         let len = self.measure_sets.len();
         if len == 0 { return 0 };
         self.measure_sets[len - 1].measure as usize + 1
+    }
+    pub fn command(&self, idx: usize) -> Option<ChannelCommand> {
+        self.commands.get(idx).map(|v| *v)
     }
 }
 
@@ -95,50 +104,81 @@ impl Default for CBMSIteratorData {
     }
 }
 
-pub struct CBMSIterator<'bms> {
-    bms: &'bms CBMS,
-    idata: CBMSIteratorData,
+pub struct CBMSIterator {
+    current_set: usize,
+    current_cmd_pos: usize,
+    current_cmd_cnt_pos: usize,
+    command_cnt: Rc<Vec<usize>>,
+    measure_sets: Rc<Vec<MeasureCommandSet>>,
 }
 
-impl<'bms> CBMSIterator<'bms> {
+impl<'bms> CBMSIterator {
     pub fn new(bms: &'bms CBMS) -> Self {
         Self {
-            bms,
-            idata: CBMSIteratorData {
-                current_set: 0,
-                current_cmd_pos: 0,
-                current_cmd_cnt_pos: 0,
-            }
+            current_set: 0,
+            current_cmd_pos: 0,
+            current_cmd_cnt_pos: 0,
+            command_cnt: Rc::clone(&bms.command_cnt),
+            measure_sets: Rc::clone(&bms.measure_sets),
         }
     }
 }
 
-impl<'whatevs> CBMSIterator<'whatevs> {
-    pub fn iterate<'bms>(bms: &'bms CBMS, idata: &mut CBMSIteratorData) -> Option<(&'bms [ChannelCommand], u32, f32)> {
+impl CBMSIterator {
+    pub fn flatten(self) -> CBMSFlatten {
+        CBMSFlatten {
+            idx: 0,
+            range: (0 .. 0),
+            bms_time: BMSTime::from(0.0),
+            iter: self,
+        }
+    }
+}
+
+impl Iterator for CBMSIterator {
+    type Item = (std::ops::Range<usize>, BMSTime);
+    fn next(&mut self) -> Option<(std::ops::Range<usize>, BMSTime)> {
         //Return None if no more commands are avaible to pull
-        if idata.current_set > bms.measure_sets.len() - 1 { return None; }
+        if self.current_set > self.measure_sets.len() - 1 { return None; }
         //Jump to next command set if all commands from the current set were already pulled and if no more commands are avaible to pull return None 
-        while idata.current_cmd_cnt_pos >= bms.measure_sets[idata.current_set].command_cnt_idx.1 {
-            idata.current_set += 1;
-            if idata.current_set >= bms.measure_sets.len() - 1 { return None; }
+        while self.current_cmd_cnt_pos >= self.measure_sets[self.current_set].command_cnt_idx.1 {
+            self.current_set += 1;
+            if self.current_set >= self.measure_sets.len() - 1 { return None; }
         }
-        let measure_set = bms.measure_sets[idata.current_set];
+        let measure_set = self.measure_sets[self.current_set];
         //Obtain command count and commands
-        let cmd_cnt = bms.command_cnt[idata.current_cmd_cnt_pos];
-        let cmds = &bms.commands[idata.current_cmd_pos .. idata.current_cmd_pos + cmd_cnt];
+        let cmd_cnt = self.command_cnt[self.current_cmd_cnt_pos];
+        let cmd_range = self.current_cmd_pos .. self.current_cmd_pos + cmd_cnt;
         //Calculate bar progress
-        let measure_progress = (idata.current_cmd_cnt_pos - measure_set.command_cnt_idx.0) as f32 / (pair_diff(measure_set.command_cnt_idx)) as f32;
+        let measure_progress = (self.current_cmd_cnt_pos - measure_set.command_cnt_idx.0) as f64 / (pair_diff(measure_set.command_cnt_idx)) as f64;
         //Move command count array cursor and command array cursor
-        idata.current_cmd_cnt_pos += 1;
-        idata.current_cmd_pos += cmd_cnt;
+        self.current_cmd_cnt_pos += 1;
+        self.current_cmd_pos += cmd_cnt;
         //Return commands
-        Some((cmds, measure_set.measure, measure_progress))
+        Some((
+            cmd_range,
+            BMSTime::from(measure_set.measure as f64 + measure_progress)))
     }
 }
 
-impl<'bms> Iterator for CBMSIterator<'bms> {
-    type Item = (&'bms [ChannelCommand], u32, f32);
-    fn next(&mut self) -> Option<(&'bms [ChannelCommand], u32, f32)> {
-        CBMSIterator::iterate(self.bms, &mut self.idata)
+pub struct CBMSFlatten {
+    idx: usize,
+    range: std::ops::Range<usize>,
+    bms_time: BMSTime,
+    iter: CBMSIterator,
+}
+
+impl Iterator for CBMSFlatten {
+    type Item = (usize, BMSTime);
+    fn next(&mut self) -> Option<(usize, BMSTime)> {
+        while !self.range.contains(&self.idx) {
+            let rt = self.iter.next()?;
+            self.range = rt.0;
+            self.bms_time = rt.1;
+            self.idx = self.range.start;
+        }
+        let cmd_idx = self.idx;
+        self.idx += 1;
+        Some((cmd_idx, self.bms_time))
     }
 }

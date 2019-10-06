@@ -5,14 +5,10 @@ extern crate lazy_static;
 /* use rand::Rng; */
 
 pub mod util;
+pub mod bms;
 pub mod cbms;
-pub mod wbms;
 pub mod compiler;
 pub mod cbms_printer;
 #[cfg(test)]
 mod tests;
 
-pub struct BMSTimeline {
-    pub bpm: f64,
-    
-}

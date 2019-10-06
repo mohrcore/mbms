@@ -2,8 +2,8 @@
 extern crate lazy_static;
 
 mod util;
+mod bms;
 mod cbms;
-mod wbms;
 mod compiler;
 mod cbms_printer;
 
@@ -28,12 +28,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     println!("Importing...");
-    let imported_bms = import_bms_from_file(/* include_str!("../data/bms/21055 Idola/n7.bme") */ file_path.trim())
+    let imported_bms = import_bms_from_file(file_path.trim())
         .expect("Error importing BMS: ");
     println!(" Title: {}\n BPM: {}", imported_bms.title, imported_bms.bpm);
     println!("Compiling...");
     let cbms = imported_bms.eval_and_compile();
-    let wbms = imported_bms.to_wbms();
     println!("Compiled BMS. Bar count: {} ({} measure sets)", cbms.bar_count(), cbms.measure_sets.len());
     loop {
         let mut buf = String::new();
@@ -47,6 +46,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("Resource no. {:04}: {}", idx, resource_path);
                 }
             },
+            "print_timed" => print_timed_bms(&cbms, &imported_bms.timing),
             _ => {
                 let bar = usize::from_str(&buf.trim())?;
                 if bar >= cbms.bar_count() { return Err(Box::new(GenericError::from_str("Bar out of bounds!")?)); }
@@ -62,4 +62,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     println!("Goodbye!");
     Ok(())
+}
+
+fn print_timed_bms(cbms: &cbms::CBMS, timings: &bms::BMSTimings) {
+    let mut iter = cbms.iter()
+        .flatten()
+        .filter(|(cmd_idx, _)| cbms.command(*cmd_idx).unwrap().value != 0)
+        .map(|(cmd_idx, bms_time)| (cbms.command(cmd_idx).unwrap(), bms_time.to_absolute_time(timings, None)));
+    for (command, time) in iter {
+        println!("{:08}: [{}] {}", time, command.channel, command.value);
+    }
 }

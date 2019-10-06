@@ -6,10 +6,11 @@ pub fn print_cbms_bar(cbms: &CBMS, bar: usize, channels_beg: u32, channels_cnt: 
     let iter = cbms.iter_from_bar(bar)?;
     let bar_len = pair_diff(cbms.measure_sets[bar].command_cnt_idx);
     let mut d_vec: Vec<Option<u32>> = vec![None; bar_len * channels_cnt as usize];
-    for (commands, measure, progress) in iter {
-        if measure != bar as u32 { break; }
-        let line = (progress * (bar_len as f32)).round() as usize;
-        for command in commands {
+    for (cmd_range, bms_time) in iter {
+        if bms_time.bar() != bar { break; }
+        let line = (bms_time.prog() * (bar_len as f64)).round() as usize;
+        for command_idx in cmd_range {
+            let command = cbms.command(command_idx).unwrap();
             if command.channel < channels_beg || command.channel >= channels_beg + channels_cnt { continue; }
             d_vec[line * channels_cnt as usize + command.channel as usize - channels_beg as usize] = Some(command.value);
         } 
